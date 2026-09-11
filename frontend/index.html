@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>پیام‌رسان</title>
+    <link rel="stylesheet" href="/static/style.css?v=20">
+</head>
+<body>
+
+<div id="notifications" class="notifications"></div>
+
+<div class="container">
+
+    <!-- ============ صفحه ثبت نام ============ -->
+    <div id="registerPage" class="page active">
+        <h2>📝 ثبت نام</h2>
+        <div class="form-group">
+            <input type="text" id="registerUsername" placeholder="نام کاربری">
+        </div>
+        <div class="form-group">
+            <input type="email" id="registerEmail" placeholder="ایمیل">
+        </div>
+        <div class="form-group">
+            <input type="password" id="registerPassword" placeholder="رمز عبور">
+        </div>
+        <button onclick="register()">ثبت نام</button>
+        <div id="registerMessage" class="message"></div>
+        <p class="switch-link">حساب دارید؟ <a href="#" onclick="showLogin(); return false;">ورود</a></p>
+    </div>
+
+    <!-- ============ صفحه ورود ============ -->
+    <div id="loginPage" class="page">
+        <h2>🔑 ورود</h2>
+        <div class="form-group">
+            <input type="text" id="loginUsername" placeholder="نام کاربری">
+        </div>
+        <div class="form-group">
+            <input type="password" id="loginPassword" placeholder="رمز عبور">
+        </div>
+        <button onclick="login()">ورود</button>
+        <div id="loginMessage" class="message"></div>
+        <p class="switch-link">حساب ندارید؟ <a href="#" onclick="showRegister(); return false;">ثبت نام</a></p>
+    </div>
+
+    <!-- ============ صفحه چت ============ -->
+    <div id="chatPage" class="page">
+
+        <div class="chat-header">
+            <h2>💬 پیام‌رسان</h2>
+            <div class="header-actions">
+                <button onclick="openCreateGroupModal()" class="icon-btn" title="گروه جدید">➕</button>
+                <button onclick="toggleDarkMode()" class="icon-btn" title="تم تاریک">🌙</button>
+                <button onclick="logout()" class="logout-btn">🚪 خروج</button>
+            </div>
+        </div>
+
+        <div class="connection-status">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">اتصال...</span>
+            <span style="margin-right:auto;">🟢 <span id="onlineCount">0</span> آنلاین</span>
+        </div>
+
+        <!-- تب‌ها -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('all', this)">👥 مخاطبان</button>
+            <button class="tab" onclick="switchTab('groups', this)">👥 گروه‌ها</button>
+            <button class="tab" onclick="switchTab('requests', this)">📨 درخواست‌ها <span id="requestsBadge" class="badge" style="display:none;">0</span></button>
+        </div>
+
+        <!-- لیست -->
+        <div class="users-list" id="usersList">
+            <div class="loading">در حال بارگذاری...</div>
+        </div>
+
+        <!-- کانتینر چت -->
+        <div class="chat-container" id="chatContainer" onscroll="checkScrollPosition()">
+            <div id="messages" class="chat-messages-wrapper"></div>
+            <div id="typingIndicator" class="typing-indicator" style="display:none;">
+                <span></span><span></span><span></span>
+            </div>
+            <button id="scrollToBottomBtn" onclick="scrollToBottom()">⬇️ رفتن به آخرین پیام (0)</button>
+        </div>
+
+        <!-- نقل‌قول (Reply) -->
+        <div id="replyBox" class="reply-box" style="display:none;">
+            <div class="reply-content">
+                <span class="reply-sender" id="replySender"></span>
+                <span class="reply-text" id="replyText"></span>
+            </div>
+            <button onclick="cancelReply()" class="reply-close">✖</button>
+        </div>
+
+        <!-- ورودی پیام -->
+        <div class="message-input">
+            <button onclick="document.getElementById('fileInput').click()" class="attach-btn" title="ارسال فایل">📎</button>
+            <input type="file" id="fileInput" style="display:none;" onchange="uploadFile(event)">
+            <input type="text" id="messageInput" placeholder="پیام خود را بنویسید..."
+                   onkeypress="if(event.key==='Enter') sendMessage()"
+                   oninput="onTyping()">
+            <button onclick="sendMessage()" class="send-btn">📤 ارسال</button>
+        </div>
+
+    </div>
+
+</div>
+
+<!-- ============ Modal ساخت گروه ============ -->
+<div id="createGroupModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>➕ ساخت گروه جدید</h3>
+            <button onclick="closeCreateGroupModal()" class="modal-close">✖</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>اسم گروه:</label>
+                <input type="text" id="groupName" placeholder="مثلاً دوستان" maxlength="100">
+            </div>
+            <div class="form-group">
+                <label>انتخاب اعضا (فقط مخاطبان):</label>
+                <div id="groupMembersList" class="members-list"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button onclick="closeCreateGroupModal()" class="cancel-btn">انصراف</button>
+            <button onclick="createGroup()" class="primary-btn">ساخت گروه</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/script.js?v=20"></script>
+</body>
+</html>
