@@ -10,8 +10,8 @@ let token = '';
 let userList = [];
 let contactList = [];
 let groupList = [];
+let allUsersList = [];       
 let pendingRequests = [];
-let sentRequests = [];
 let isAtBottom = true;
 let newMessageCount = 0;
 let renderedMessageIds = new Set();
@@ -19,8 +19,9 @@ let currentTab = 'all';
 let typingTimeout = null;
 let userOnlineNotified = new Set();
 let replyToMessage = null;
+let profileUserId = null;
 
-// ============ توابع کمکی ============
+// ============ نمایش صفحات ============
 function showLogin() {
     document.getElementById('loginPage').classList.add('active');
     document.getElementById('registerPage').classList.remove('active');
@@ -75,7 +76,7 @@ async function register() {
         const data = await response.json();
 
         if (response.ok) {
-            showMessage(msg, '✅ ثبت نام موفق!', 'success');
+            showMessage(msg, '✅ ثبت نام موفق! لطفاً وارد شوید.', 'success');
             document.getElementById('registerUsername').value = '';
             document.getElementById('registerEmail').value = '';
             document.getElementById('registerPassword').value = '';
@@ -113,7 +114,7 @@ async function login() {
 
         if (response.ok) {
             token = data.access_token;
-            currentUser = data.user_id;
+            currentUser = Number(data.user_id);
             currentUsername = data.username;
 
             showMessage(msg, '✅ ورود موفق!', 'success');
@@ -128,6 +129,7 @@ async function login() {
             loadContacts();
             loadGroups();
             loadPendingRequests();
+            loadAllUsers();  // ⬅️ اضافه کن
         } else {
             showMessage(msg, '❌ ' + (data.detail || 'نام کاربری یا رمز اشتباه'), 'error');
         }
@@ -157,6 +159,7 @@ function connectWebSocket() {
     ws.onmessage = function (event) {
         try {
             const data = JSON.parse(event.data);
+            console.log('📨 WebSocket:', data.type);
 
             if (data.type === 'new_message') {
                 handleNewMessage(data.message);
@@ -166,11 +169,13 @@ function connectWebSocket() {
                 removeMessageFromUI(data.message.id);
             } else if (data.type === 'user_online') {
                 loadUsers();
+                loadAllUsers();
                 if (data.user_id !== currentUser && data.ask_contact) {
                     showUserOnlineNotification(data.user_id, data.username);
                 }
             } else if (data.type === 'user_offline') {
                 loadUsers();
+                loadAllUsers();
             } else if (data.type === 'typing') {
                 handleTypingIndicator(data);
             } else if (data.type === 'contact_request') {
@@ -180,8 +185,12 @@ function connectWebSocket() {
                 showNotification(`✅ ${data.by.username} درخواست شما را قبول کرد`, 'success');
                 loadContacts();
                 loadUsers();
+                loadAllUsers();
             } else if (data.type === 'group_member_left') {
                 showNotification(`👋 ${data.user.username} از گروه خارج شد`, 'info');
+                loadGroups();
+            } else if (data.type === 'new_group') {
+                showNotification(`👥 گروه جدید: ${data.group.name}`, 'info');
                 loadGroups();
             }
         } catch (e) {
@@ -203,16 +212,28 @@ function connectWebSocket() {
     };
 }
 
+// ============ مدیریت پیام جدید ============
 function handleNewMessage(message) {
     if (renderedMessageIds.has(message.id)) {
         loadUsers();
         return;
     }
 
-    const isMyMessage = message.sender_id === currentUser;
+    const senderId = Number(message.sender_id);
+    const receiverId = message.receiver_id ? Number(message.receiver_id) : null;
+    const groupId = message.group_id ? Number(message.group_id) : null;
+    const chatUserId = currentChatUser ? Number(currentChatUser) : null;
+    const chatGroupId = currentChatGroup ? Number(currentChatGroup) : null;
+    const myId = Number(currentUser);
+
+    const isMyMessage = senderId === myId;
+
     const isCurrentChat =
-        (message.receiver_id && message.receiver_id === currentChatUser) ||
-        (message.group_id && message.group_id === currentChatGroup);
+        (chatUserId && (
+            (senderId === chatUserId && receiverId === myId) ||
+            (receiverId === chatUserId && senderId === myId)
+        )) ||
+        (chatGroupId && groupId === chatGroupId);
 
     if (isMyMessage) {
         if (isCurrentChat) displayMessage(message, true);
@@ -224,7 +245,7 @@ function handleNewMessage(message) {
                 showScrollToBottomButton();
             }
         } else {
-            const sender = userList.find(u => u.id === message.sender_id);
+            const sender = userList.find(u => Number(u.id) === senderId);
             if (sender) {
                 showNotification(`📩 پیام جدید از ${sender.username}`, 'info');
                 sendBrowserNotification('پیام جدید', `از ${sender.username}`);
@@ -257,8 +278,8 @@ function onTyping() {
 
 function handleTypingIndicator(data) {
     const isCurrent =
-        (data.sender_id === currentChatUser) ||
-        (data.group_id && data.group_id === currentChatGroup);
+        (Number(data.sender_id) === Number(currentChatUser)) ||
+        (data.group_id && Number(data.group_id) === Number(currentChatGroup));
 
     if (!isCurrent) return;
 
@@ -293,12 +314,14 @@ function switchTab(tab, btn) {
         renderUsers();
     } else if (tab === 'groups') {
         renderGroups();
+    } else if (tab === 'everyone') {
+        loadAllUsers();
     } else if (tab === 'requests') {
         renderRequests();
     }
 }
 
-// ============ لیست مخاطبان ============
+
 async function loadUsers() {
     try {
         const response = await fetch(`${API_BASE}/api/users`, {
@@ -331,7 +354,7 @@ function renderUsers() {
     userList.forEach(user => {
         const div = document.createElement('div');
         div.className = 'user-item';
-        if (currentChatUser === user.id) div.classList.add('active');
+        if (Number(currentChatUser) === Number(user.id)) div.classList.add('active');
 
         div.innerHTML = `
             <div class="user-info">
@@ -344,7 +367,91 @@ function renderUsers() {
     });
 }
 
-// ============ لیست مخاطبان (Contacts) ============
+// ============ همه کاربران (جدید) ============
+async function loadAllUsers() {
+    try {
+        const response = await fetch(`${API_BASE}/api/users/all`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (response.ok) {
+            allUsersList = await response.json();
+            renderAllUsers();
+        }
+    } catch (error) {
+        console.error('خطا در بارگذاری همه کاربران:', error);
+    }
+}
+
+function renderAllUsers() {
+    const usersList = document.getElementById('usersList');
+
+    if (allUsersList.length === 0) {
+        usersList.innerHTML = '<div class="loading">کاربر دیگری وجود ندارد</div>';
+        return;
+    }
+
+    usersList.innerHTML = '';
+    allUsersList.forEach(user => {
+        const div = document.createElement('div');
+        div.className = 'user-item';
+
+        const isContact = contactList.some(c => Number(c.id) === Number(user.id));
+        const hasPending = pendingRequests.some(r => Number(r.user.id) === Number(user.id));
+
+        div.innerHTML = `
+            <div class="user-info">
+                <span class="user-status ${user.is_online ? 'online' : 'offline'}"></span>
+                <span>${escapeHtml(user.username)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+                ${isContact ? '<span style="font-size:12px;color:#4caf50;">✓ مخاطب</span>' : ''}
+                ${hasPending ? '<span style="font-size:12px;color:#ff9800;">⏳ در انتظار</span>' : ''}
+                ${!isContact && !hasPending ? `
+                    <button class="request-btn" onclick="event.stopPropagation(); requestContact(${user.id})">➕ مخاطب</button>
+                ` : ''}
+            </div>
+        `;
+        div.onclick = () => openChat(user);
+        usersList.appendChild(div);
+    });
+}
+
+function renderAllUsers() {
+    const usersList = document.getElementById('usersList');
+
+    if (allUsersList.length === 0) {
+        usersList.innerHTML = '<div class="loading">کاربر دیگری وجود ندارد</div>';
+        return;
+    }
+
+    usersList.innerHTML = '';
+    allUsersList.forEach(user => {
+        const div = document.createElement('div');
+        div.className = 'user-item';
+
+        const isContact = contactList.some(c => Number(c.id) === Number(user.id));
+        const hasPending = pendingRequests.some(r => Number(r.user.id) === Number(user.id));
+
+        div.innerHTML = `
+            <div class="user-info">
+                <span class="user-status ${user.is_online ? 'online' : 'offline'}"></span>
+                <span>${escapeHtml(user.username)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+                ${isContact ? '<span style="font-size:12px;color:#4caf50;">✓ مخاطب</span>' : ''}
+                ${hasPending ? '<span style="font-size:12px;color:#ff9800;">⏳ در انتظار</span>' : ''}
+                ${!isContact && !hasPending ? `
+                    <button class="request-btn" onclick="event.stopPropagation(); requestContact(${user.id})">➕ مخاطب</button>
+                ` : ''}
+            </div>
+        `;
+        div.onclick = () => openChat(user);
+        usersList.appendChild(div);
+    });
+}
+
+// ============ مخاطبان (Contacts) ============
 async function loadContacts() {
     try {
         const response = await fetch(`${API_BASE}/api/contacts`, {
@@ -353,13 +460,16 @@ async function loadContacts() {
 
         if (response.ok) {
             contactList = await response.json();
+            if (currentTab === 'everyone') {
+                renderAllUsers();
+            }
         }
     } catch (error) {
-        console.error('خطا:', error);
+        console.error('خطا در بارگذاری مخاطبان:', error);
     }
 }
 
-// ============ لیست گروه‌ها ============
+// ============ گروه‌ها ============
 async function loadGroups() {
     try {
         const response = await fetch(`${API_BASE}/api/groups`, {
@@ -389,14 +499,14 @@ function renderGroups() {
     groupList.forEach(group => {
         const div = document.createElement('div');
         div.className = 'user-item';
-        if (currentChatGroup === group.id) div.classList.add('active');
+        if (Number(currentChatGroup) === Number(group.id)) div.classList.add('active');
 
         div.innerHTML = `
             <div class="user-info">
                 <span class="user-avatar">👥</span>
                 <span>${escapeHtml(group.name)}</span>
             </div>
-            <span style="font-size:11px;color:#999;">${group.members.length} عضو</span>
+            <span style="font-size:12px;color:#999;">${group.members.length} عضو</span>
         `;
         div.onclick = () => openGroupChat(group);
         usersList.appendChild(div);
@@ -415,6 +525,9 @@ async function loadPendingRequests() {
             updateRequestsBadge();
             if (currentTab === 'requests') {
                 renderRequests();
+            }
+            if (currentTab === 'everyone') {
+                renderAllUsers();
             }
         }
     } catch (error) {
@@ -448,7 +561,7 @@ function renderRequests() {
             <div class="user-info">
                 <span>👤 ${escapeHtml(req.user.username)}</span>
             </div>
-            <div style="display:flex;gap:4px;">
+            <div style="display:flex;gap:6px;">
                 <button class="request-btn" style="background:#4caf50 !important;"
                         onclick="event.stopPropagation(); acceptContact(${req.request_id}, this)">✅</button>
                 <button class="request-btn" style="background:#e74c3c !important;"
@@ -470,6 +583,8 @@ async function requestContact(userId) {
 
         if (response.ok) {
             showNotification('✅ درخواست ارسال شد', 'success');
+            loadPendingRequests();
+            loadAllUsers();
         } else {
             showNotification('❌ ' + (data.detail || 'خطا'), 'error');
         }
@@ -491,6 +606,7 @@ async function acceptContact(requestId, btn) {
             loadPendingRequests();
             loadContacts();
             loadUsers();
+            loadAllUsers();
             renderRequests();
         }
     } catch (error) {
@@ -507,6 +623,7 @@ async function rejectContact(requestId, btn) {
 
         if (response.ok) {
             loadPendingRequests();
+            loadAllUsers();
             renderRequests();
         }
     } catch (error) {
@@ -559,7 +676,7 @@ function showNotification(text, type = 'info') {
 
 // ============ باز کردن چت خصوصی ============
 async function openChat(user) {
-    currentChatUser = user.id;
+    currentChatUser = Number(user.id);
     currentChatGroup = null;
     newMessageCount = 0;
     cancelReply();
@@ -581,7 +698,7 @@ async function openChat(user) {
                 messagesDiv.innerHTML = '<div class="loading">هنوز پیامی نیست</div>';
             } else {
                 messages.forEach(msg => {
-                    const isSent = msg.sender_id === currentUser;
+                    const isSent = Number(msg.sender_id) === Number(currentUser);
                     displayMessage(msg, isSent, true);
                 });
             }
@@ -595,7 +712,7 @@ async function openChat(user) {
 
 // ============ باز کردن چت گروهی ============
 async function openGroupChat(group) {
-    currentChatGroup = group.id;
+    currentChatGroup = Number(group.id);
     currentChatUser = null;
     newMessageCount = 0;
     cancelReply();
@@ -617,7 +734,7 @@ async function openGroupChat(group) {
                 messagesDiv.innerHTML = '<div class="loading">هنوز پیامی نیست</div>';
             } else {
                 messages.forEach(msg => {
-                    const isSent = msg.sender_id === currentUser;
+                    const isSent = Number(msg.sender_id) === Number(currentUser);
                     displayMessage(msg, isSent, true);
                 });
             }
@@ -654,23 +771,25 @@ function displayMessage(message, isSent, skipDuplicateCheck = false) {
         let contentHtml = '';
 
         if (message.message_type === 'image' && message.file_url) {
-            contentHtml = `<img src="${message.file_url}" alt="image" onclick="window.open('${message.file_url}', '_blank')">`;
+            const filename = message.file_url.replace('/uploads/', '');
+            const secureUrl = `/api/files/${filename}?token=${token}`;
+            contentHtml = `<img src="${secureUrl}" alt="image" loading="lazy" onclick="window.open('${secureUrl}', '_blank')">`;
         } else if (message.message_type === 'file' && message.file_url) {
-            contentHtml = `<a href="${message.file_url}" target="_blank">📎 دانلود فایل</a>`;
+            const filename = message.file_url.replace('/uploads/', '');
+            const secureUrl = `/api/files/${filename}?token=${token}`;
+            contentHtml = `<a href="${secureUrl}" target="_blank">📎 دانلود فایل</a>`;
         } else {
             contentHtml = escapeHtml(message.content);
         }
 
         const editBadge = message.is_edited
-            ? ' <span style="font-size:10px;opacity:0.5;">(ویرایش شده)</span>'
+            ? ' <span style="font-size:11px;opacity:0.5;">(ویرایش شده)</span>'
             : '';
 
-        // اسم فرستنده (فقط توی گروه)
         const senderName = (!isSent && message.group_id && message.sender_username)
-            ? `<div class="sender-name">${escapeHtml(message.sender_username)}</div>`
+            ? `<div class="sender-name" onclick="showUserProfile(${message.sender_id})">${escapeHtml(message.sender_username)}</div>`
             : '';
 
-        // نقل‌قول (Reply)
         let replyHtml = '';
         if (message.reply_to) {
             replyHtml = `
@@ -802,8 +921,8 @@ function startEditMessage(messageId) {
                onkeypress="if(event.key==='Enter') saveEdit(${messageId})"
                onkeydown="if(event.key==='Escape') cancelEdit(${messageId}, '${escapeHtml(oldContent).replace(/'/g, "\\'")}')">
         <div style="display:flex; gap:4px; margin-top:4px;">
-            <button onclick="saveEdit(${messageId})" style="font-size:11px; padding:2px 8px; width:auto; margin:0;">✅</button>
-            <button onclick="cancelEdit(${messageId}, '${escapeHtml(oldContent).replace(/'/g, "\\'")}')" style="font-size:11px; padding:2px 8px; width:auto; margin:0; background:#999;">✖</button>
+            <button onclick="saveEdit(${messageId})" style="font-size:12px; padding:4px 10px; width:auto; margin:0;">✅</button>
+            <button onclick="cancelEdit(${messageId}, '${escapeHtml(oldContent).replace(/'/g, "\\'")}')" style="font-size:12px; padding:4px 10px; width:auto; margin:0; background:#999;">✖</button>
         </div>
     `;
 
@@ -869,7 +988,7 @@ function updateMessageInUI(message) {
         oldEl.remove();
         renderedMessageIds.delete(message.id);
     }
-    const isSent = message.sender_id === currentUser;
+    const isSent = Number(message.sender_id) === Number(currentUser);
     displayMessage(message, isSent, true);
 }
 
@@ -981,7 +1100,7 @@ async function uploadFile(event) {
     event.target.value = '';
 }
 
-// ============ Modal ساخت گروه ============
+// ============ Modal گروه ============
 function openCreateGroupModal() {
     document.getElementById('createGroupModal').style.display = 'flex';
     document.getElementById('groupName').value = '';
@@ -1049,26 +1168,66 @@ async function createGroup() {
     }
 }
 
-// ============ ترک گروه ============
-async function leaveGroup(groupId) {
-    if (!confirm('از گروه خارج می‌شوی؟ پیام‌هایت از گروه پاک می‌شوند.')) return;
+// ============ پروفایل کاربر ============
+function showUserProfile(userId) {
+    let user = userList.find(u => Number(u.id) === Number(userId));
+    if (!user) {
+        user = contactList.find(u => Number(u.id) === Number(userId));
+    }
+    if (!user) {
+        user = allUsersList.find(u => Number(u.id) === Number(userId));
+    }
+    if (!user) {
+        showNotification('❌ کاربر پیدا نشد', 'error');
+        return;
+    }
 
-    try {
-        const response = await fetch(`${API_BASE}/api/groups/${groupId}/leave`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+    profileUserId = Number(userId);
 
-        if (response.ok) {
-            showNotification('✅ از گروه خارج شدی', 'success');
-            if (currentChatGroup === groupId) {
-                currentChatGroup = null;
-                document.getElementById('messages').innerHTML = '';
-            }
-            loadGroups();
-        }
-    } catch (error) {
-        console.error('Error:', error);
+    document.getElementById('profileAvatar').textContent = '👤';
+    document.getElementById('profileUsername').textContent = user.username;
+
+    const statusEl = document.getElementById('profileStatus');
+    if (user.is_online) {
+        statusEl.textContent = '🟢 آنلاین';
+        statusEl.className = 'profile-status online';
+    } else {
+        statusEl.textContent = '⚪ آفلاین';
+        statusEl.className = 'profile-status offline';
+    }
+
+    if (user.last_seen) {
+        const lastSeen = new Date(user.last_seen);
+        document.getElementById('profileLastSeen').textContent = 
+            lastSeen.toLocaleString('fa-IR');
+    } else {
+        document.getElementById('profileLastSeen').textContent = 'نامشخص';
+    }
+
+    if (user.created_at) {
+        const createdAt = new Date(user.created_at);
+        document.getElementById('profileCreatedAt').textContent = 
+            createdAt.toLocaleDateString('fa-IR');
+    } else {
+        document.getElementById('profileCreatedAt').textContent = 'نامشخص';
+    }
+
+    document.getElementById('userProfileModal').style.display = 'flex';
+}
+
+function closeUserProfileModal() {
+    document.getElementById('userProfileModal').style.display = 'none';
+    profileUserId = null;
+}
+
+function openChatFromProfile() {
+    if (!profileUserId) return;
+    const user = userList.find(u => Number(u.id) === profileUserId) ||
+                 contactList.find(u => Number(u.id) === profileUserId) ||
+                 allUsersList.find(u => Number(u.id) === profileUserId);
+    if (user) {
+        closeUserProfileModal();
+        openChat(user);
     }
 }
 
@@ -1077,7 +1236,6 @@ function toggleDarkMode() {
     document.body.classList.toggle('dark-mode');
     const isDark = document.body.classList.contains('dark-mode');
     localStorage.setItem('darkMode', isDark ? 'on' : 'off');
-    console.log('🌙 Dark mode:', isDark ? 'ON' : 'OFF');
 }
 
 if (localStorage.getItem('darkMode') === 'on') {
@@ -1104,6 +1262,7 @@ async function logout() {
     userList = [];
     contactList = [];
     groupList = [];
+    allUsersList = [];
     renderedMessageIds.clear();
     userOnlineNotified.clear();
     cancelReply();
@@ -1118,4 +1277,4 @@ async function logout() {
     showLogin();
 }
 
-console.log('✅ script.js v20 بارگذاری شد!');
+console.log('✅ script.js v3 بارگذاری شد!');

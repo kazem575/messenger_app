@@ -12,11 +12,22 @@ DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False}
+    connect_args={"check_same_thread": False},
+    pool_size=20,         
+    max_overflow=30,       
+    pool_timeout=60,       
+    pool_recycle=3600,     
+    pool_pre_ping=True,    
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 class User(Base):
     __tablename__ = "users"
@@ -35,12 +46,12 @@ class Message(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    receiver_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # for DM
-    group_id = Column(Integer, ForeignKey("groups.id"), nullable=True)  # for group
+    receiver_id = Column(Integer, ForeignKey("users.id"), nullable=True)  
+    group_id = Column(Integer, ForeignKey("groups.id"), nullable=True)  
     content = Column(Text, nullable=False)
     message_type = Column(String, default="text")
     file_url = Column(String, nullable=True)
-    reply_to_id = Column(Integer, ForeignKey("messages.id"), nullable=True)  # ⬅️ جدید
+    reply_to_id = Column(Integer, ForeignKey("messages.id"), nullable=True)  
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     is_read = Column(Boolean, default=False)
     is_edited = Column(Boolean, default=False)
@@ -83,7 +94,15 @@ class GroupMember(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     joined_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-
+class ContactRequestAttempt(Base):
+    __tablename__ = "contact_request_attempts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    target_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    answer = Column(String, nullable=False)
+    attempted_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
 print(f"📁 database path: {DB_PATH}")
 Base.metadata.create_all(bind=engine)
 print("✅ Database created successfully!")

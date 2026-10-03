@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>پیام‌رسان</title>
-    <link rel="stylesheet" href="/static/style.css?v=20">
+    <link rel="stylesheet" href="/static/style.css?v=31">
 </head>
 <body>
 
@@ -61,19 +61,17 @@
             <span style="margin-right:auto;">🟢 <span id="onlineCount">0</span> آنلاین</span>
         </div>
 
-        <!-- تب‌ها -->
         <div class="tabs">
             <button class="tab active" onclick="switchTab('all', this)">👥 مخاطبان</button>
             <button class="tab" onclick="switchTab('groups', this)">👥 گروه‌ها</button>
+            <button class="tab" onclick="switchTab('everyone', this)">🌍 همه کاربران</button>
             <button class="tab" onclick="switchTab('requests', this)">📨 درخواست‌ها <span id="requestsBadge" class="badge" style="display:none;">0</span></button>
         </div>
 
-        <!-- لیست -->
         <div class="users-list" id="usersList">
             <div class="loading">در حال بارگذاری...</div>
         </div>
 
-        <!-- کانتینر چت -->
         <div class="chat-container" id="chatContainer" onscroll="checkScrollPosition()">
             <div id="messages" class="chat-messages-wrapper"></div>
             <div id="typingIndicator" class="typing-indicator" style="display:none;">
@@ -82,7 +80,6 @@
             <button id="scrollToBottomBtn" onclick="scrollToBottom()">⬇️ رفتن به آخرین پیام (0)</button>
         </div>
 
-        <!-- نقل‌قول (Reply) -->
         <div id="replyBox" class="reply-box" style="display:none;">
             <div class="reply-content">
                 <span class="reply-sender" id="replySender"></span>
@@ -91,7 +88,6 @@
             <button onclick="cancelReply()" class="reply-close">✖</button>
         </div>
 
-        <!-- ورودی پیام -->
         <div class="message-input">
             <button onclick="document.getElementById('fileInput').click()" class="attach-btn" title="ارسال فایل">📎</button>
             <input type="file" id="fileInput" style="display:none;" onchange="uploadFile(event)">
@@ -129,6 +125,35 @@
     </div>
 </div>
 
-<script src="/static/script.js?v=20"></script>
+<!-- ============ Modal پروفایل کاربر ============ -->
+<div id="userProfileModal" class="modal" style="display:none;">
+    <div class="modal-content profile-modal">
+        <div class="modal-header">
+            <h3>👤 پروفایل کاربر</h3>
+            <button onclick="closeUserProfileModal()" class="modal-close">✖</button>
+        </div>
+        <div class="modal-body profile-body">
+            <div class="profile-avatar" id="profileAvatar">👤</div>
+            <h3 class="profile-username" id="profileUsername">-</h3>
+            <div class="profile-status" id="profileStatus">-</div>
+            <div class="profile-info">
+                <div class="profile-info-row">
+                    <span class="profile-info-label">آخرین بازدید:</span>
+                    <span class="profile-info-value" id="profileLastSeen">-</span>
+                </div>
+                <div class="profile-info-row">
+                    <span class="profile-info-label">عضویت از:</span>
+                    <span class="profile-info-value" id="profileCreatedAt">-</span>
+                </div>
+            </div>
+            <div class="profile-actions">
+                <button onclick="openChatFromProfile()" class="primary-btn">💬 ارسال پیام</button>
+                <button onclick="closeUserProfileModal()" class="cancel-btn">بستن</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/script.js?v=31"></script>
 </body>
 </html>

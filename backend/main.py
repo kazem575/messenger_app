@@ -4,7 +4,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -17,7 +17,8 @@ import shutil
 import uuid
 
 from database import (
-    SessionLocal, User, Message, Contact, ContactRequest, Group, GroupMember
+    SessionLocal, User, Message, Contact, ContactRequest, 
+    ContactRequestAttempt, Group, GroupMember
 )
 from models import (
     UserCreate, UserLogin, UserResponse,
@@ -31,20 +32,30 @@ from auth import (
 )
 from websocket_manager import manager
 
+# ============ Rate Limiter ============
 limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(title="پیام‌رسان تحت وب", version="4.0.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# ============ CORS ============
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "https://message-box.ir",
+        "https://www.message-box.ir",
+        "https://desktop-1ebo8os.taile7482d.ts.net",
+        "http://desktop-1ebo8os.taile7482d.ts.net",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ============ مسیرها ============
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 frontend_path = os.path.join(BASE_DIR, "frontend")
 uploads_path = os.path.join(BASE_DIR, "backend", "uploads")
@@ -57,9 +68,33 @@ if os.path.exists(frontend_path):
     app.mount("/static", StaticFiles(directory=frontend_path), name="static")
     print("✅ frontend found")
 
-app.mount("/uploads", StaticFiles(directory=uploads_path), name="uploads")
-
-
+@app.get("/api/files/{filename}")
+async def get_file(filename: str, token: str = None, db: Session = Depends(get_db)):
+    try:
+        if not token:
+            raise HTTPException(status_code=401, detail="توکن لازم است")
+        
+        payload = decode_token(token)
+        if not payload:
+            raise HTTPException(status_code=401, detail="توکن نامعتبر")
+        
+        username = payload.get("sub")
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="کاربر پیدا نشد")
+        
+        filepath = os.path.join(uploads_path, filename)
+        if not os.path.exists(filepath):
+            raise HTTPException(status_code=404, detail="فایل پیدا نشد")
+        
+        return FileResponse(filepath)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ get_file error: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="خطای داخلی سرور")
+# ============ توابع کمکی ============
 def user_to_dict(user: User) -> dict:
     return {
         "id": user.id,
@@ -87,13 +122,11 @@ def message_to_dict(msg: Message, db: Session = None) -> dict:
         "is_deleted": msg.is_deleted,
     }
 
-    # اطلاعات فرستنده
     if db:
         sender = db.query(User).filter(User.id == msg.sender_id).first()
         if sender:
             result["sender_username"] = sender.username
 
-        # اطلاعات پیام پاسخ
         if msg.reply_to_id:
             reply_msg = db.query(Message).filter(Message.id == msg.reply_to_id).first()
             if reply_msg:
@@ -114,6 +147,7 @@ async def send_ws(user_id: int, data: dict):
         print(f"❌ WS error to {user_id}: {e}")
 
 
+# ============ صفحه اصلی ============
 @app.get("/")
 def root():
     return {"message": "پیام‌رسان v4.0", "docs": "/docs"}
@@ -128,8 +162,10 @@ async def serve_index():
     raise HTTPException(status_code=404, detail="index.html not found")
 
 
+# ============ ثبت‌نام ============
 @app.post("/api/register")
-def register(user: UserCreate, db: Session = Depends(get_db)):
+@limiter.limit("10/hour")
+def register(request: Request, user: UserCreate, db: Session = Depends(get_db)):
     try:
         existing = db.query(User).filter(
             (User.username == user.username) | (User.email == user.email)
@@ -153,8 +189,9 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============ ورود ============
 @app.post("/api/login")
-@limiter.limit("100/minute")
+@limiter.limit("20/minute")
 def login(request: Request, user: UserLogin, db: Session = Depends(get_db)):
     try:
         db_user = authenticate_user(db, user.username, user.password)
@@ -185,6 +222,7 @@ def login(request: Request, user: UserLogin, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============ خروج ============
 @app.post("/api/logout")
 def logout(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     current_user.is_online = False
@@ -193,17 +231,86 @@ def logout(current_user: User = Depends(get_current_user), db: Session = Depends
     return {"message": "خارج شدید"}
 
 
-# ============ کاربران: فقط مخاطبان دوطرفه ============
+# ============ لیست کاربران ============
 @app.get("/api/users")
 def get_users(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """فقط مخاطبان دوطرفه رو برمی‌گردونه"""
     contacts = db.query(Contact).filter(Contact.user_id == current_user.id).all()
     contact_ids = [c.contact_id for c in contacts]
+    if not contact_ids:
+        return []
     users = db.query(User).filter(User.id.in_(contact_ids)).all()
     return [user_to_dict(u) for u in users]
 
+# ============ لیست همه کاربران (برای تب «همه کاربران») ============
+@app.get("/api/users/all")
+def get_all_users(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """همه کاربران به‌جز خودم"""
+    users = db.query(User).filter(User.id != current_user.id).all()
+    return [user_to_dict(u) for u in users]
 
-# ============ درخواست‌های در انتظار (دریافت‌شده) ============
+
+# ============ چک کن کاربر قبلاً چند بار جواب داده ============
+@app.get("/api/contact-attempts/{target_user_id}")
+def get_contact_attempts(
+    target_user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """چند بار کاربر به درخواست این کاربر جواب داده"""
+    attempts = db.query(ContactRequestAttempt).filter(
+        ContactRequestAttempt.user_id == current_user.id,
+        ContactRequestAttempt.target_user_id == target_user_id
+    ).order_by(ContactRequestAttempt.attempted_at.desc()).limit(3).all()
+    
+    return {
+        "count": len(attempts),
+        "attempts": [
+            {
+                "answer": a.answer,
+                "attempted_at": a.attempted_at.isoformat()
+            }
+            for a in attempts
+        ],
+        "can_ask": len(attempts) < 3
+    }
+
+
+# ============ ثبت جواب کاربر (آره/نه) ============
+@app.post("/api/contact-attempts/{target_user_id}")
+def record_contact_attempt(
+    target_user_id: int,
+    answer: str,  # "accepted" یا "rejected"
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """ثبت جواب کاربر به درخواست مخاطب"""
+    if answer not in ["accepted", "rejected"]:
+        raise HTTPException(status_code=400, detail="جواب نامعتبر")
+    
+    # چک کن قبلاً ۳ بار جواب نداده
+    existing_count = db.query(ContactRequestAttempt).filter(
+        ContactRequestAttempt.user_id == current_user.id,
+        ContactRequestAttempt.target_user_id == target_user_id
+    ).count()
+    
+    if existing_count >= 3:
+        raise HTTPException(status_code=400, detail="سقف جواب‌ها پر شده")
+    
+    # ثبت
+    attempt = ContactRequestAttempt(
+        user_id=current_user.id,
+        target_user_id=target_user_id,
+        answer=answer
+    )
+    db.add(attempt)
+    db.commit()
+    
+    return {
+        "message": "ثبت شد",
+        "count": existing_count + 1,
+        "can_ask": (existing_count + 1) < 3
+    }
+# ============ درخواست‌های در انتظار ============
 @app.get("/api/contacts/pending")
 def get_pending(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     requests = db.query(ContactRequest).filter(
@@ -370,15 +477,16 @@ def delete_contact(
     return {"message": "حذف شد"}
 
 
-# ============ ارسال پیام (خصوصی یا گروهی) ============
+# ============ ارسال پیام ============
 @app.post("/api/messages")
+@limiter.limit("60/minute")
 async def send_message(
+    request: Request,
     message: MessageCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
-        # اعتبارسنجی
         if not message.receiver_id and not message.group_id:
             raise HTTPException(status_code=400, detail="گیرنده یا گروه لازم است")
 
@@ -391,7 +499,6 @@ async def send_message(
             group = db.query(Group).filter(Group.id == message.group_id).first()
             if not group:
                 raise HTTPException(status_code=404, detail="گروه پیدا نشد")
-            # چک کن کاربر عضو گروهه
             is_member = db.query(GroupMember).filter(
                 GroupMember.group_id == message.group_id,
                 GroupMember.user_id == current_user.id
@@ -399,7 +506,6 @@ async def send_message(
             if not is_member:
                 raise HTTPException(status_code=403, detail="عضو گروه نیستی")
 
-        # چک کن پیام پاسخ وجود داره
         if message.reply_to_id:
             reply_msg = db.query(Message).filter(Message.id == message.reply_to_id).first()
             if not reply_msg:
@@ -421,12 +527,10 @@ async def send_message(
         result = message_to_dict(db_message, db)
         data = {"type": "new_message", "message": result}
 
-        # ارسال به گیرنده
         if message.receiver_id:
             await send_ws(message.receiver_id, data)
             await send_ws(current_user.id, data)
 
-        # ارسال به اعضای گروه
         if message.group_id:
             members = db.query(GroupMember).filter(
                 GroupMember.group_id == message.group_id
@@ -541,11 +645,21 @@ async def delete_message(
 
 # ============ آپلود فایل ============
 @app.post("/api/upload")
+@limiter.limit("20/hour")
 async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
     try:
+        # محدودیت حجم فایل (۱۰ مگابایت)
+        MAX_SIZE = 10 * 1024 * 1024
+        file.file.seek(0, 2)
+        size = file.file.tell()
+        file.file.seek(0)
+        if size > MAX_SIZE:
+            raise HTTPException(status_code=413, detail="فایل بزرگ‌تر از ۱۰ مگابایت")
+
         ext = os.path.splitext(file.filename)[1]
         filename = f"{uuid.uuid4()}{ext}"
         filepath = os.path.join(uploads_path, filename)
@@ -558,6 +672,8 @@ async def upload_file(
             "filename": file.filename,
             "size": os.path.getsize(filepath),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -565,12 +681,11 @@ async def upload_file(
 
 # ============ گروه‌ها ============
 @app.post("/api/groups")
-def create_group(
+async def create_group(
     group: GroupCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # فقط مخاطبان
     contacts = db.query(Contact).filter(Contact.user_id == current_user.id).all()
     contact_ids = [c.contact_id for c in contacts]
 
@@ -586,12 +701,22 @@ def create_group(
     db.commit()
     db.refresh(db_group)
 
-    # سازنده
     db.add(GroupMember(group_id=db_group.id, user_id=current_user.id))
-    # اعضا
     for mid in group.member_ids:
         db.add(GroupMember(group_id=db_group.id, user_id=mid))
     db.commit()
+
+    # اطلاع به همه اعضا
+    all_members = [current_user.id] + group.member_ids
+    for member_id in all_members:
+        await send_ws(member_id, {
+            "type": "new_group",
+            "group": {
+                "id": db_group.id,
+                "name": db_group.name,
+                "creator_id": db_group.creator_id,
+            }
+        })
 
     return {"id": db_group.id, "name": db_group.name}
 
@@ -606,72 +731,6 @@ def get_groups(
     for m in members:
         g = db.query(Group).filter(Group.id == m.group_id).first()
         if g:
-            # لیست اعضا
-            group_members = db.query(GroupMember).filter(
-                GroupMember.group_id == g.id
-            ).all()
-            members_list = []
-            for gm in group_members:
-                u = db.query(User).filter(User.id == gm.user_id).first()
-                if u:
-                    members_list.append({
-                        "id": u.id,
-                        "username": u.username,
-                        "is_online": manager.is_online(u.id),
-                    })
-
-            result.append({
-                "id": g.id,
-                "name": g.name,
-                "creator_id": g.creator_id,
-                "created_at": g.created_at.isoformat(),
-                "members": members_list,
-            })
-    return result
-
-@app.post("/api/groups")
-def create_group(
-    group: GroupCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    # فقط مخاطبان
-    contacts = db.query(Contact).filter(Contact.user_id == current_user.id).all()
-    contact_ids = [c.contact_id for c in contacts]
-
-    for mid in group.member_ids:
-        if mid not in contact_ids and mid != current_user.id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"کاربر {mid} جزو مخاطبان شما نیست"
-            )
-
-    db_group = Group(name=group.name, creator_id=current_user.id)
-    db.add(db_group)
-    db.commit()
-    db.refresh(db_group)
-
-    # سازنده
-    db.add(GroupMember(group_id=db_group.id, user_id=current_user.id))
-    # اعضا
-    for mid in group.member_ids:
-        db.add(GroupMember(group_id=db_group.id, user_id=mid))
-    db.commit()
-
-    return {"id": db_group.id, "name": db_group.name}
-
-
-@app.get("/api/groups")
-def get_groups(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    members = db.query(GroupMember).filter(GroupMember.user_id == current_user.id).all()
-    result = []
-    for m in members:
-        g = db.query(Group).filter(Group.id == m.group_id).first()
-        if g:
-            # لیست اعضا
             group_members = db.query(GroupMember).filter(
                 GroupMember.group_id == g.id
             ).all()
@@ -767,20 +826,17 @@ async def leave_group(
     if not is_member:
         raise HTTPException(status_code=403, detail="عضو گروه نیستی")
 
-    # پیام‌های کاربر از گروه پاک می‌شن (گزینه ج)
     db.query(Message).filter(
         Message.group_id == group_id,
         Message.sender_id == current_user.id
     ).delete()
 
-    # کاربر از گروه حذف
     db.query(GroupMember).filter(
         GroupMember.group_id == group_id,
         GroupMember.user_id == current_user.id
     ).delete()
     db.commit()
 
-    # اگه گروه خالی شد، حذف کن
     remaining = db.query(GroupMember).filter(
         GroupMember.group_id == group_id
     ).count()
@@ -788,7 +844,6 @@ async def leave_group(
         db.query(Group).filter(Group.id == group_id).delete()
         db.commit()
 
-    # به اعضای گروه اطلاع بده
     members = db.query(GroupMember).filter(
         GroupMember.group_id == group_id
     ).all()
@@ -853,7 +908,8 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
 
             is_contact = db.query(Contact).filter(
                 Contact.user_id == other_id,
-                Contact.contact_id == user_id            ).first()
+                Contact.contact_id == user_id
+            ).first()
 
             has_request = db.query(ContactRequest).filter(
                 ContactRequest.from_user_id == other_id,
